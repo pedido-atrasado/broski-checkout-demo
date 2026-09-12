@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fazer uma doação</title>
+<meta name="robots" content="noindex, nofollow">
+<title>Fazer uma doação — DEMO</title>
 <style>
   :root { --azul:#0b5ed7; --linha:#dfe3e8; --cinza:#5a6b7b; }
   * { box-sizing:border-box; }
@@ -39,12 +40,135 @@
   .livre-input { display:none; margin-top:12px; align-items:center; gap:8px; }
   .valor.sel .livre-input { display:flex; }
   :focus-visible { outline:2px solid var(--azul); outline-offset:2px; }
+  .faixa { position:fixed; top:0; left:0; right:0; z-index:99; background:#fff3cd; border-bottom:1px solid #e8c96a; color:#6b4e00; font-size:13px; line-height:1.45; padding:9px 14px; text-align:center; }
+  body { padding-top:52px; }
 </style>
 </head>
 <body>
+
+<div class="faixa">
+  ⚠️ <b>DEMO</b> — demonstração do frontend do checkout. Os pagamentos são <b>simulados</b>:
+  nenhuma doação é cobrada, processada ou recebida.
+</div>
+
 <div class="wrap"><div class="card" id="app"></div></div>
 
 <script>
+/* ===========================================================================
+   BACKEND SIMULADO — roda inteiramente no browser.
+   Em produção isto é o server.js (Node + API Broski). Aqui as mesmas regras
+   são replicadas em JS para a demo funcionar sem servidor:
+     - o valor vem do "servidor" (CATALOG), nunca do corpo do pedido
+     - telemóvel validado por ^9[1236]\d{7}$
+     - limites MB WAY €0,50 a €5.000
+     - MB WAY: pending -> paid (como se o webhook tivesse chegado)
+     - Multibanco: awaiting_payment com entidade/referência, ecrã final
+   =========================================================================== */
+const SIM = (() => {
+  const CATALOG = {
+    'doacao-30':   { amount: 3000,   description: 'Doação — 12 dias de medicação para dor' },
+    'doacao-50':   { amount: 5000,   description: 'Doação — 19 dias de medicação para dor' },
+    'doacao-100':  { amount: 10000,  description: 'Doação — 20 dias de pensos especiais' },
+    'doacao-250':  { amount: 25000,  description: 'Doação — 30 dias de medicação, pensos especiais e refeições' },
+    'doacao-500':  { amount: 50000,  description: 'Doação — 60 dias de medicação, pensos especiais e refeições' },
+    'doacao-1000': { amount: 100000, description: 'Doação — 120 dias de medicação, pensos especiais e refeições' },
+  };
+  const LIVRE = { min: 100, max: 500000 };
+  const MBWAY_MIN = 50, MBWAY_MAX = 500000;
+
+  const orders = new Map();
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function normalizePhone(raw) {
+    const d = String(raw || '').replace(/[\s\-().]/g, '');
+    const nat = d.startsWith('+351') ? d.slice(4) : (d.startsWith('351') && d.length === 12 ? d.slice(3) : d);
+    return /^9[1236]\d{7}$/.test(nat) ? '+351' + nat : null;
+  }
+
+  const ok  = (data, status = 201) => ({ ok: true,  status, data });
+  const bad = (error, message, status = 400) => ({ ok: false, status, data: { error, message } });
+
+  const newRef = () => 'demo-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  function mbReference() {
+    let s = '';
+    for (let i = 0; i < 9; i++) s += Math.floor(Math.random() * 10);
+    return s.slice(0, 3) + ' ' + s.slice(3, 6) + ' ' + s.slice(6, 9);
+  }
+
+  async function checkout(body) {
+    await sleep(450);                                  // latência simulada
+    const { sku, amount: rawAmount, method, phone, email } = body || {};
+
+    // O valor vem SEMPRE daqui, ignorando o que veio no corpo — menos doacao-livre.
+    let item = CATALOG[sku];
+    if (sku === 'doacao-livre') {
+      const n = Number(rawAmount);
+      if (!Number.isInteger(n)) return bad('valor_invalido', 'Indique um valor válido.');
+      if (n < LIVRE.min || n > LIVRE.max) {
+        return bad('valor_invalido', 'Indique um valor entre ' + (LIVRE.min / 100).toFixed(2).replace('.', ',') +
+                   ' € e ' + (LIVRE.max / 100).toFixed(2).replace('.', ',') + ' €.');
+      }
+      item = { amount: n, description: 'Doação — valor personalizado' };
+    }
+    if (!item)                  return bad('sku_invalido', 'Valor desconhecido.');
+    if (!email)                 return bad('email_obrigatorio', 'Indique o seu e-mail.');
+    if (method !== 'mbway' && method !== 'multibanco') return bad('metodo_invalido', 'Método inválido.');
+
+    let phoneNorm = null;
+    if (method === 'mbway') {
+      phoneNorm = normalizePhone(phone);
+      if (!phoneNorm) return bad('telemovel_invalido', 'Introduza um telemóvel português válido (9 dígitos).');
+      if (item.amount < MBWAY_MIN || item.amount > MBWAY_MAX) return bad('valor_invalido', 'MB WAY aceita €0,50 a €5.000.');
+      for (const o of orders.values()) {
+        if (o.method === 'mbway' && o.phone === phoneNorm && o.status === 'pending') {
+          // 409 NAO e falha de pagamento — a UI mostra a message tal e qual.
+          return { ok: false, status: 409, data: {
+            error: 'mbway_pending_for_phone',
+            message: 'Já existe um pedido MB WAY pendente para este número. Confirme na app MB WAY ou aguarde alguns minutos.',
+          } };
+        }
+      }
+    }
+
+    const now = Date.now();
+    const rec = {
+      ref: newRef(),
+      status: method === 'mbway' ? 'pending' : 'awaiting_payment',
+      method, amount: item.amount, description: item.description,
+      phone: phoneNorm,
+      multibanco: method === 'multibanco' ? {
+        entity: '11249',
+        reference: mbReference(),
+        amount: item.amount,
+        expires_at: new Date(now + 2 * 24 * 3600 * 1000).toISOString(),
+      } : null,
+      fulfilled: false, amount_refunded: 0,
+      _confirmaEm: now + (method === 'mbway' ? 6000 : 12000),   // como o mock do projeto
+    };
+    orders.set(rec.ref, rec);
+
+    return ok({
+      ref: rec.ref, status: rec.status, method: rec.method,
+      amount: rec.amount, multibanco: rec.multibanco, description: rec.description,
+    });
+  }
+
+  async function status(ref) {
+    const o = orders.get(ref);
+    if (!o) return bad('nao_encontrado', 'Pedido não encontrado.', 404);
+    if (o.status !== 'paid' && Date.now() >= o._confirmaEm) {
+      o.status = 'paid'; o.fulfilled = true;            // equivale ao webhook order.paid
+    }
+    return ok({
+      ref: o.ref, status: o.status, fulfilled: o.fulfilled,
+      amount: o.amount, amount_refunded: o.amount_refunded, multibanco: o.multibanco,
+    }, 200);
+  }
+
+  return { checkout, status, normalizePhone };
+})();
+
+/* ============================ UI (igual ao original) ======================= */
 const app = document.getElementById('app');
 let poll = null, prazo = null;
 
@@ -91,10 +215,10 @@ function formulario(erroHtml = '') {
     <label>Método de pagamento</label>
     <div class="metodos">
       <div class="metodo sel" data-m="mbway">
-        <img src="https://docs.broski.pt/assets/mbway.svg" alt="MB WAY" height="28">
+        <img src="assets/mbway.svg" alt="MB WAY" height="28">
       </div>
       <div class="metodo" data-m="multibanco">
-        <img src="https://docs.broski.pt/assets/multibanco.svg" alt="Multibanco" height="40">
+        <img src="assets/multibanco.svg" alt="Multibanco" height="40">
       </div>
     </div>
     <div id="phone-wrap" style="display:block">
@@ -144,10 +268,8 @@ function formulario(erroHtml = '') {
       phone: document.getElementById('phone').value,
     };
     try {
-      const r = await fetch('/api/checkout', {
-        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
-      });
-      const d = await r.json();
+      const r = await SIM.checkout(body);
+      const d = r.data;
       if (!r.ok) {
         // 409 mbway_pending_for_phone: mostrar a message tal e qual, NAO e falha de pagamento.
         const cls = d.error === 'mbway_pending_for_phone' ? 'aviso' : 'erro';
@@ -169,6 +291,7 @@ function esperaMbway(d) {
       <h1 style="margin-bottom:8px">Confirme o pagamento na app MB WAY</h1>
       <p class="sub">Enviámos um pedido de ${eur(d.amount)} para o seu telemóvel.<br>Abra a app MB WAY e confirme.</p>
       <p class="sub" style="margin-top:16px" id="tempo"></p>
+      <p class="sub" style="margin-top:18px;font-size:12px;opacity:.75">Demo: o pagamento confirma sozinho em ~6 s.</p>
     </div>`;
 
   poll = setInterval(async () => {
@@ -178,8 +301,8 @@ function esperaMbway(d) {
 
     if (dec === 0) { clearInterval(poll); return naoConfirmado('O tempo para confirmar esgotou.'); }
 
-    const r = await fetch(`/api/orders/${d.ref}/status`);
-    const s = await r.json();
+    const r = await SIM.status(d.ref);
+    const s = r.data;
     if (s.status === 'paid') { clearInterval(poll); return pago(s); }
     if (s.status === 'failed' || s.status === 'expired') {
       clearInterval(poll);
@@ -194,7 +317,7 @@ function voucher(d) {
   const exp = mb.expires_at ? new Date(mb.expires_at).toLocaleString('pt-PT') : '—';
   app.innerHTML = `
     <div class="voucher">
-      <img src="https://docs.broski.pt/assets/multibanco.svg" alt="Multibanco" height="48">
+      <img src="assets/multibanco.svg" alt="Multibanco" height="48">
       <h1 style="margin:16px 0 6px">Guarde estes dados</h1>
       <p class="sub">Pague num Multibanco, no homebanking ou na app do seu banco.</p>
       <div style="margin-top:18px;text-align:left">
@@ -203,7 +326,7 @@ function voucher(d) {
         <div class="linha"><span>Valor</span><b>${eur(mb.amount ?? d.amount)}</b></div>
         <div class="linha" style="border:0"><span>Válido até</span><b style="font-size:15px">${exp}</b></div>
       </div>
-      <p class="sub" style="margin-top:18px">Enviámos também estes dados para o seu e-mail. Assim que o pagamento for confirmado, receberá a confirmação.</p>
+      <p class="sub" style="margin-top:18px"><b>Referência de demonstração</b> — não é pagável em nenhum Multibanco.</p>
       <button class="pagar" onclick="location.reload()">Concluir</button>
     </div>`;
 }
@@ -215,6 +338,7 @@ function pago(s) {
       <h1>Doação confirmada</h1>
       <p class="sub">Recebemos ${eur(s.amount)}. Obrigado.</p>
       <p class="sub">Referência: <code>${s.ref}</code></p>
+      <p class="sub" style="margin-top:14px;font-size:12px;opacity:.75">Simulação — nenhum valor foi cobrado.</p>
       <button class="pagar" onclick="location.reload()">Voltar</button>
     </div>`;
 }

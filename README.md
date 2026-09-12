@@ -1,54 +1,41 @@
-# Doações — Checkout MB WAY + Multibanco (DEMO)
+# Checkout MB WAY + Multibanco — site
 
-**Site estático de demonstração** do frontend do checkout. Publicado no GitHub Pages.
+Site publicado no GitHub Pages a partir do `public/index.html` do projeto.
 
-> ⚠️ **DEMO.** Os pagamentos são **simulados** — nenhuma doação é cobrada, processada
-> ou recebida. As referências Multibanco mostradas não são pagáveis. O link é público,
-> mas está marcado `noindex` e não é para divulgação a doadores.
+## 🔗 Links
 
-## O que isto é (e o que não é)
+| Arquivo | URL | O que é |
+|---|---|---|
+| `index.html` | https://pedido-atrasado.github.io/broski-checkout-demo/ | **O index original do projeto, sem alteração** |
+| `simulado.html` | https://pedido-atrasado.github.io/broski-checkout-demo/simulado.html | Mesmo site, com o backend simulado no browser — o formulário **funciona até ao fim** |
 
-| | |
-|---|---|
-| ✅ É | O frontend real (`public/index.html` do projeto), com o mesmo visual e o mesmo fluxo |
-| ✅ É | 100% estático — HTML + CSS + JS, zero build, zero servidor |
-| ❌ Não é | O sistema em produção. Não fala com a API Broski, não tem chaves, não processa dinheiro |
+## Diferença entre os dois
 
-O backend está **simulado dentro do próprio `index.html`** (bloco `SIM`). As regras
-foram replicadas para a demo se comportar como o servidor de verdade:
+**`index.html`** — é literalmente o `public/index.html` do projeto. Renderiza igual.
+Mas o botão **Doar dá erro**: ele faz `fetch('/api/checkout')`, e no GitHub Pages
+não existe servidor para responder — o Pages só entrega ficheiros. Aparece
+*"Erro de rede. Tente novamente."* Sem backend, nada acontece.
 
-- o valor vem sempre do "servidor" (`CATALOG`), nunca do corpo do pedido — só `doacao-livre` é validado
-- telemóvel português validado por `^9[1236]\d{7}$`
-- limites de MB WAY: €0,50 a €5.000
-- MB WAY: `pending` → `paid` (como se o webhook `order.paid` tivesse chegado)
-- Multibanco: `awaiting_payment` com entidade/referência, **ecrã final sem polling**
-- duplicado: pedido MB WAY pendente para o mesmo número devolve 409 `mbway_pending_for_phone`
+**`simulado.html`** — mesma página, mesmo CSS, mesmo fluxo, mas com o backend
+replicado em JS dentro do próprio ficheiro. Dá para percorrer o fluxo todo:
+formulário → espera do MB WAY → confirmação, e o voucher Multibanco. Reproduz as
+regras do servidor (valor do `CATALOG`, telemóvel `^9[1236]\d{7}$`, limites MB WAY,
+409 de duplicado, MB WAY confirma em ~6 s, Multibanco sem polling). Está marcado
+como DEMO, com `noindex` e aviso de que nada é cobrado.
 
-## Prazo da simulação
+## Por que o site não funciona sozinho
 
-| Método | Comportamento |
-|---|---|
-| MB WAY | confirma sozinho após ~6 s |
-| Multibanco | ecrã final; entidade `11249`, referência gerada, validade 2 dias |
+O projeto é um servidor Node 22 + Express (`server.js`, rotas `/api/checkout`,
+`/api/orders/:ref/status`, `/webhooks/broski`). O GitHub Pages **não executa
+código** — só serve ficheiros estáticos. Para o checkout processar de verdade,
+o projeto precisa de um host com Node (Railway, Render, VPS) e das chaves reais
+(`BROSKI_SECRET_KEY`, `BROSKI_WEBHOOK_SECRET`), com `PUBLIC_URL` HTTPS a bater
+**exatamente** com a URL registada no painel Broski.
 
-## Por que aqui e não no repositório principal
-
-GitHub Pages **serve apenas ficheiros estáticos**. O projeto real é um servidor
-Node.js + Express (`server.js`, rotas `/api/checkout`, `/api/orders/:ref/status`,
-`/webhooks/broski`), que o Pages não executa. Por isso:
-
-- **este repositório** = só o site, público, para ver o fluxo num link `github.io`
-- **o código-fonte** = repositório privado, precisa de um host com Node 22
-  (Railway, Render, VPS) e de chaves reais
-
-Para produzir de verdade: `BROSKI_SECRET_KEY`, `BROSKI_WEBHOOK_SECRET` e um
-`PUBLIC_URL` HTTPS que bata **exatamente** com a URL registada no painel Broski.
+O código-fonte completo está no repositório privado `broski-checkout`.
 
 ## Rodar localmente
 
 ```bash
 python -m http.server 8080
-# http://localhost:8080
 ```
-
-Qualquer servidor de ficheiros estáticos serve. Não há dependências.
